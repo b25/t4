@@ -50,7 +50,7 @@ namespace Mono.TextTemplating
 		public string Name { get; set; }
 		public string Namespace { get; set; }
 		public HashSet<string> Imports { get; private set; }
-		public HashSet<string> Assemblies { get; private set; }
+		public HashSet<string> Assemblies { get;  set; }
 		public System.CodeDom.Compiler.CodeDomProvider Provider { get; set; }
 		public string Language { get; set; }
 		public string CompilerOptions { get; set; }

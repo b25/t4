@@ -67,6 +67,8 @@ namespace Mono.TextTemplating
 		public List<string> Imports { get; } = new List<string> ();
 		public List<string> IncludePaths { get; } = new List<string> ();
 		public List<string> ReferencePaths { get; } = new List<string> ();
+
+		public List<string> Templates { get; } = new List<string> ();
 		public string OutputFile { get; protected set; }
 		public string TemplateFile { get; protected set; }
 		public bool UseRelativeLinePragmas { get; set; }

@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "dotnet-t4": {
+      "commandName": "Project",
+      "commandLineArgs": "Dir=mytemplatedir P=bin folder"
+    }
+  }
+}

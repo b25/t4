@@ -1,4 +1,4 @@
-﻿// 
+// 
 // Copyright (c) 2009 Novell, Inc. (http://www.novell.com)
 // Copyright (c) Microsoft Corp. (https://www.microsoft.com)
 // 
@@ -27,6 +27,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using Microsoft.VisualStudio.TextTemplating;
 using Mono.Options;
 
@@ -36,7 +37,7 @@ namespace Mono.TextTemplating
 	{
 		static OptionSet optionSet, compatOptionSet;
 
-		public static int Main (string [] args)
+		public static int Main (string[] args)
 		{
 			try {
 				return MainInternal (args);
@@ -47,7 +48,7 @@ namespace Mono.TextTemplating
 			}
 		}
 
-		static int MainInternal (string [] args)
+		static int MainInternal (string[] args)
 		{
 			if (args.Length == 0) {
 				ShowHelp (true);
@@ -57,7 +58,7 @@ namespace Mono.TextTemplating
 			string outputFile = null, inputFile = null;
 			var directives = new List<string> ();
 			var parameters = new List<string> ();
-			var properties = new Dictionary<string,string> ();
+			var properties = new Dictionary<string, string> ();
 			string preprocessClassName = null;
 			bool debug = false;
 			bool verbose = false;
@@ -114,6 +115,11 @@ namespace Mono.TextTemplating
 					s => verbose = true
 				},
 				{
+					"Dir=",
+					"Search {<directory>} and process all files with *.tt extension",
+					s =>  generator.Templates.AddRange(Directory.GetFiles(s,"*.tt"))
+				},
+				{
 					"h|?|help",
 					"Show help",
 					s => ShowHelp (false)
@@ -136,110 +142,163 @@ namespace Mono.TextTemplating
 			var remainingArgs = optionSet.Parse (args);
 			remainingArgs = compatOptionSet.Parse (remainingArgs);
 
+			var templates = GetTemplatesFromDirParam (remainingArgs);
+			var binFolder = GetBinFolder (remainingArgs);
+
+			bool useTemplatesDirParam = templates.Any ();
 			string inputContent = null;
-			if (remainingArgs.Count != 1) {
-				if (Console.IsInputRedirected) {
-					inputContent = Console.In.ReadToEnd ();
-				} else {
-					Console.Error.WriteLine ("No input file specified.");
-					return 1;
-				}
-			} else {
-				inputFile = remainingArgs [0];
-				if (!File.Exists (inputFile)) {
-					Console.Error.WriteLine ("Input file '{0}' does not exist.", inputFile);
-					return 1;
-				}
-			}
-
-			bool writeToStdout = outputFile == "-";
-			if (!writeToStdout && string.IsNullOrEmpty (outputFile)) {
-				outputFile = inputFile;
-				if (Path.HasExtension (outputFile)) {
-					var dir = Path.GetDirectoryName (outputFile);
-					var fn = Path.GetFileNameWithoutExtension (outputFile);
-					outputFile = Path.Combine (dir, fn + ".txt");
-				} else {
-					outputFile = outputFile + ".txt";
-				}
-			}
-
-			if (inputFile != null) {
-				try {
-					inputContent = File.ReadAllText (inputFile);
-				}
-				catch (IOException ex) {
-					Console.Error.WriteLine ("Could not read input file '" + inputFile + "':\n" + ex);
-					return 1;
-				}
-			}
-
-			if (inputContent.Length == 0) {
-				Console.Error.WriteLine ("Input is empty");
-				return 1;
-			}
-
-			foreach (var par in parameters) {
-				if (!generator.TryAddParameter (par)) {
-					Console.Error.WriteLine ("Parameter has incorrect format: {0}", par);
-					return 1;
-				}
-			}
-
-			if (!AddDirectiveProcessors (generator, directives)) {
-				return 1;
-			}
-
-			var pt = ParsedTemplate.FromText (inputContent, generator);
-
-			TemplateSettings settings = TemplatingEngine.GetSettings (generator, pt);
-			if (debug) {
-				settings.Debug = true;
-			}
-			if (verbose) {
-				settings.Log = Console.Out;
-			}
-
-			if (pt.Errors.Count > 0) {
-				generator.Errors.AddRange (pt.Errors);
-			}
-
-			string outputContent = null;
-			if (!generator.Errors.HasErrors) {
-				AddCoercedSessionParameters (generator, pt, properties);
-			}
-
-			if (!generator.Errors.HasErrors) {
-				if (preprocessClassName == null) {
-					outputContent = generator.ProcessTemplate (pt, inputFile, inputContent, ref outputFile, settings);
-				} else {
-					outputContent = generator.PreprocessTemplate (pt, inputFile, inputContent, preprocessClassName, settings);
-				}
-			}
-
-			if (generator.Errors.HasErrors) {
-				Console.Error.WriteLine (inputFile == null ? "Processing failed." : $"Processing '{inputFile}' failed.");
-			}
-
-			try {
-				if (!generator.Errors.HasErrors) {
-					if (writeToStdout) {
-						Console.WriteLine (outputContent);
+			if (!useTemplatesDirParam) {
+				if (remainingArgs.Count != 1) {
+					if (Console.IsInputRedirected) {
+						inputContent = Console.In.ReadToEnd ();
 					} else {
-						File.WriteAllText (outputFile, outputContent, new UTF8Encoding (encoderShouldEmitUTF8Identifier: false));
+						Console.Error.WriteLine ("No input file specified.");
+						return 1;
+					}
+				} else {
+					inputFile = remainingArgs[0];
+					if (!File.Exists (inputFile)) {
+						Console.Error.WriteLine ("Input file '{0}' does not exist.", inputFile);
+						return 1;
 					}
 				}
-			}
-			catch (IOException ex) {
-				Console.Error.WriteLine ("Could not write output file '" + outputFile + "':\n" + ex);
-				return 1;
+
+				templates = new string[] { inputFile };
 			}
 
+			foreach (var templateFile in templates) {
+				if (useTemplatesDirParam) {
+					inputFile = templateFile;
+					outputFile = null;
+				}
+
+
+				bool writeToStdout = outputFile == "-";
+				if (!writeToStdout && string.IsNullOrEmpty (outputFile)) {
+					outputFile = inputFile;
+					if (Path.HasExtension (outputFile)) {
+						var dir = Path.GetDirectoryName (outputFile);
+						var fn = Path.GetFileNameWithoutExtension (outputFile);
+						outputFile = Path.Combine (dir, fn + ".cs");
+					} else {
+						outputFile = outputFile + ".txt";
+					}
+				}
+
+				if (inputFile != null) {
+					try {
+						inputContent = File.ReadAllText (inputFile);
+					}
+					catch (IOException ex) {
+						Console.Error.WriteLine ("Could not read input file '" + inputFile + "':\n" + ex);
+						return 1;
+					}
+				}
+
+				if (inputContent.Length == 0) {
+					Console.Error.WriteLine ("Input is empty");
+					return 1;
+				}
+
+				foreach (var par in parameters) {
+					if (!generator.TryAddParameter (par)) {
+						Console.Error.WriteLine ("Parameter has incorrect format: {0}", par);
+						return 1;
+					}
+				}
+
+				if (!AddDirectiveProcessors (generator, directives)) {
+					return 1;
+				}
+
+				var pt = ParsedTemplate.FromText (inputContent, generator);
+
+				TemplateSettings settings = TemplatingEngine.GetSettings (generator, pt);
+				if (debug) {
+					settings.Debug = true;
+				}
+				if (verbose) {
+					settings.Log = Console.Out;
+				}
+
+				if (pt.Errors.Count > 0) {
+					generator.Errors.AddRange (pt.Errors);
+				}
+
+				string outputContent = null;
+				if (!generator.Errors.HasErrors) {
+					AddCoercedSessionParameters (generator, pt, properties);
+				}
+
+				//fix template assemblies path
+				var fixedList = new HashSet<string> ();
+				foreach(var x in settings.Assemblies) {
+					fixedList.Add (FixPath (x, binFolder));
+				}
+				settings.Assemblies = fixedList;
+
+				if (!generator.Errors.HasErrors) {
+					if (preprocessClassName == null) {
+						outputContent = generator.ProcessTemplate (pt, inputFile, inputContent, ref outputFile, settings);
+					} else {
+						outputContent = generator.PreprocessTemplate (pt, inputFile, inputContent, preprocessClassName, settings);
+					}
+				}
+
+				if (generator.Errors.HasErrors) {
+					Console.Error.WriteLine (inputFile == null ? "Processing failed." : $"Processing '{inputFile}' failed.");
+				}
+
+				try {
+					if (!generator.Errors.HasErrors) {
+						if (writeToStdout) {
+							Console.WriteLine (outputContent);
+						} else {
+							File.WriteAllText (outputFile, outputContent, new UTF8Encoding (encoderShouldEmitUTF8Identifier: false));
+						}
+					}
+				}
+				catch (IOException ex) {
+					Console.Error.WriteLine ("Could not write output file '" + outputFile + "':\n" + ex);
+					return 1;
+				}
+			}
 			LogErrors (generator);
-
+			if (!generator.Errors.HasErrors) {
+				Console.WriteLine ($"\r\n ALL GENERATED SUCCESSFULLY :)");
+			}
 			return generator.Errors.HasErrors ? 1 : 0;
 		}
 
+		static string[] GetTemplatesFromDirParam (List<string> paramS)
+		{
+			foreach (var x in paramS) {
+				if (x.IndexOf ("Dir=", StringComparison.InvariantCultureIgnoreCase) == 0) {
+					return Directory.GetFiles (x.Substring (4, x.Length - 4), "*.tt");
+				}
+			}
+			return new string[0];
+		}
+
+		static string GetBinFolder (List<string> paramS)
+		{
+			foreach (var x in paramS) {
+				if (x.IndexOf ("P=", StringComparison.InvariantCultureIgnoreCase) == 0) {
+					return x.Substring (2, x.Length - 2);
+				}
+			}
+			return string.Empty;
+		}
+
+		static string FixPath (string assemblyPath, string binFolder)
+		{
+			if (assemblyPath.IndexOf ("$(SolutionDir)", StringComparison.InvariantCultureIgnoreCase) == 0) {
+				var lastSlash = assemblyPath.LastIndexOf ("\\");
+				return $"{binFolder}{assemblyPath.Substring(lastSlash,assemblyPath.Length-lastSlash)}";
+			}
+
+			return assemblyPath;
+		}
 		static void AddCoercedSessionParameters (ToolTemplateGenerator generator, ParsedTemplate pt, Dictionary<string, string> properties)
 		{
 			if (properties.Count == 0) {
@@ -259,7 +318,7 @@ namespace Mono.TextTemplating
 					var mappedType = ParameterDirectiveProcessor.MapTypeName (typeName);
 					if (mappedType != "System.String") {
 						if (ConvertType (mappedType, p.Value, out object converted)) {
-							session [p.Key] = converted;
+							session[p.Key] = converted;
 							continue;
 						}
 
@@ -271,7 +330,7 @@ namespace Mono.TextTemplating
 						);
 					}
 				}
-				session [p.Key] = p.Value;
+				session[p.Key] = p.Value;
 			}
 		}
 
@@ -310,7 +369,7 @@ namespace Mono.TextTemplating
 				}
 
 				for (int i = 0; i < 3; i++) {
-					string s = split [i];
+					string s = split[i];
 					if (string.IsNullOrEmpty (s)) {
 						string kind = i == 0 ? "name" : (i == 1 ? "class" : "assembly");
 						Console.Error.WriteLine ("Directive has missing {0} value: {1}", kind, dir);
@@ -318,7 +377,7 @@ namespace Mono.TextTemplating
 					}
 				}
 
-				generator.AddDirectiveProcessor (split [0], split [1], split [2]);
+				generator.AddDirectiveProcessor (split[0], split[1], split[2]);
 			}
 			return true;
 		}
@@ -327,7 +386,7 @@ namespace Mono.TextTemplating
 		{
 			foreach (System.CodeDom.Compiler.CompilerError err in generator.Errors) {
 				var oldColor = Console.ForegroundColor;
-				Console.ForegroundColor = err.IsWarning? ConsoleColor.Yellow : ConsoleColor.Red;
+				Console.ForegroundColor = err.IsWarning ? ConsoleColor.Yellow : ConsoleColor.Red;
 				if (!string.IsNullOrEmpty (err.FileName)) {
 					Console.Error.Write (err.FileName);
 				}
@@ -345,6 +404,7 @@ namespace Mono.TextTemplating
 				}
 				Console.Error.Write (err.IsWarning ? "WARNING: " : "ERROR: ");
 				Console.Error.WriteLine (err.ErrorText);
+				Console.WriteLine (err.ErrorText);
 				Console.ForegroundColor = oldColor;
 			}
 		}
