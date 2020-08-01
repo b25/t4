@@ -284,7 +284,17 @@ namespace Mono.TextTemplating
 		{
 			foreach (var x in paramS) {
 				if (x.IndexOf ("P=", StringComparison.InvariantCultureIgnoreCase) == 0) {
-					return x.Substring (2, x.Length - 2);
+					var binFolder = x.Substring (2, x.Length - 2);
+
+					if (!Path.IsPathFullyQualified(binFolder)) {
+						binFolder = Path.GetFullPath (binFolder, Directory.GetCurrentDirectory ());
+					}
+
+					if (!Path.EndsInDirectorySeparator(binFolder)) {
+						binFolder += Path.DirectorySeparatorChar;
+					}
+
+					return binFolder;
 				}
 			}
 			return string.Empty;
@@ -293,7 +303,7 @@ namespace Mono.TextTemplating
 		static string FixPath (string assemblyPath, string binFolder)
 		{
 			if (assemblyPath.IndexOf ("$(SolutionDir)", StringComparison.InvariantCultureIgnoreCase) == 0) {
-				var lastSlash = assemblyPath.LastIndexOf ("\\");
+				var lastSlash = assemblyPath.LastIndexOf ("\\") + 1;
 				return $"{binFolder}{assemblyPath.Substring(lastSlash,assemblyPath.Length-lastSlash)}";
 			}
 
